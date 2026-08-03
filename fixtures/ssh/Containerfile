@@ -1,0 +1,15 @@
+FROM docker.io/library/node:22-alpine
+
+RUN apk add --no-cache openssh \
+    && adduser -D -s /bin/sh aegiz \
+    && passwd -d aegiz \
+    && install -d -m 0700 -o aegiz -g aegiz /home/aegiz/.ssh \
+    && install -d -m 0750 -o aegiz -g aegiz /home/aegiz/fixture \
+    && printf 'fixture seed\n' > '/home/aegiz/fixture/seed file.txt' \
+    && chown aegiz:aegiz '/home/aegiz/fixture/seed file.txt'
+
+COPY entrypoint.sh /usr/local/bin/aegiz-ssh-fixture
+RUN chmod 0755 /usr/local/bin/aegiz-ssh-fixture
+
+EXPOSE 22
+ENTRYPOINT ["/usr/local/bin/aegiz-ssh-fixture"]

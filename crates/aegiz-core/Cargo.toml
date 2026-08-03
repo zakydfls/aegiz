@@ -1,0 +1,34 @@
+[package]
+name = "aegiz-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[dependencies]
+aegiz-domain = { path = "../aegiz-domain" }
+aegiz-platform = { path = "../aegiz-platform" }
+aegiz-storage = { path = "../aegiz-storage" }
+anyhow.workspace = true
+async-stream.workspace = true
+chrono.workspace = true
+clap.workspace = true
+futures-core = "0.3.31"
+futures-util = "=0.3.31"
+hex.workspace = true
+prost.workspace = true
+regex.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[build-dependencies]
+protoc-bin-vendored = "3.2.0"
+tonic-prost-build = "0.14.1"

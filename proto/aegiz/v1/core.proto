@@ -1,0 +1,241 @@
+syntax = "proto3";
+
+package aegiz.v1;
+
+service AegizCore {
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  rpc GetDashboard(GetDashboardRequest) returns (Dashboard);
+  rpc ListHosts(ListHostsRequest) returns (ListHostsResponse);
+  rpc ImportSSHConfig(ImportSSHConfigRequest) returns (ImportSSHConfigResponse);
+  rpc ListTunnels(ListTunnelsRequest) returns (ListTunnelsResponse);
+  rpc SaveTunnel(SaveTunnelRequest) returns (Tunnel);
+  rpc SetTunnelState(SetTunnelStateRequest) returns (stream OperationEvent);
+  rpc ListCapabilities(ListCapabilitiesRequest) returns (ListCapabilitiesResponse);
+  rpc RunTool(RunToolRequest) returns (stream OperationEvent);
+  rpc CancelOperation(CancelOperationRequest) returns (CancelOperationResponse);
+  rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse);
+  rpc ListDatabaseProfiles(ListDatabaseProfilesRequest) returns (ListDatabaseProfilesResponse);
+  rpc SaveDatabaseProfile(SaveDatabaseProfileRequest) returns (DatabaseProfile);
+  rpc DeleteDatabaseProfile(DeleteDatabaseProfileRequest) returns (DeleteDatabaseProfileResponse);
+  rpc RunDatabaseQuery(RunDatabaseQueryRequest) returns (stream OperationEvent);
+  rpc ExportBackup(ExportBackupRequest) returns (ExportBackupResponse);
+  rpc RestoreBackup(RestoreBackupRequest) returns (RestoreBackupResponse);
+}
+
+message HandshakeRequest {
+  string app_version = 1;
+}
+
+message HandshakeResponse {
+  string core_version = 1;
+  uint32 protocol_version = 2;
+}
+
+message GetDashboardRequest {}
+
+message Dashboard {
+  uint32 host_count = 1;
+  uint32 tunnel_count = 2;
+  uint32 active_tunnel_count = 3;
+  uint32 attention_count = 4;
+}
+
+message ListHostsRequest {
+  string query = 1;
+}
+
+message ListHostsResponse {
+  repeated Host hosts = 1;
+}
+
+message Host {
+  string id = 1;
+  string alias = 2;
+  string hostname = 3;
+  string user = 4;
+  uint32 port = 5;
+  string proxy_jump = 6;
+  string source = 7;
+  repeated string tags = 8;
+}
+
+message ImportSSHConfigRequest {
+  string path = 1;
+}
+
+message ImportSSHConfigResponse {
+  uint32 imported = 1;
+  uint32 updated = 2;
+  uint32 skipped = 3;
+  repeated string warnings = 4;
+}
+
+message ListTunnelsRequest {}
+
+message ListTunnelsResponse {
+  repeated Tunnel tunnels = 1;
+}
+
+enum TunnelKind {
+  TUNNEL_KIND_UNSPECIFIED = 0;
+  TUNNEL_KIND_LOCAL = 1;
+  TUNNEL_KIND_REMOTE = 2;
+  TUNNEL_KIND_DYNAMIC = 3;
+}
+
+enum TunnelStatus {
+  TUNNEL_STATUS_UNSPECIFIED = 0;
+  TUNNEL_STATUS_STOPPED = 1;
+  TUNNEL_STATUS_STARTING = 2;
+  TUNNEL_STATUS_RUNNING = 3;
+  TUNNEL_STATUS_STOPPING = 4;
+  TUNNEL_STATUS_FAILED = 5;
+}
+
+message Tunnel {
+  string id = 1;
+  string host_id = 2;
+  string label = 3;
+  TunnelKind kind = 4;
+  string bind_address = 5;
+  uint32 local_port = 6;
+  string remote_host = 7;
+  uint32 remote_port = 8;
+  TunnelStatus status = 9;
+  string last_error = 10;
+}
+
+message SaveTunnelRequest {
+  Tunnel tunnel = 1;
+}
+
+message SetTunnelStateRequest {
+  string tunnel_id = 1;
+  bool running = 2;
+  bytes ssh_auth_secret = 3;
+}
+
+message OperationEvent {
+  string operation_id = 1;
+  string phase = 2;
+  string message = 3;
+  uint32 progress = 4;
+  bool terminal = 5;
+  bool success = 6;
+  string stream = 7;
+  uint64 sequence = 8;
+  int32 exit_code = 9;
+}
+
+message ListCapabilitiesRequest {}
+
+message ToolCapability {
+  string id = 1;
+  string label = 2;
+  bool available = 3;
+  string executable_path = 4;
+  string version = 5;
+  string diagnostic = 6;
+  bool runnable = 7;
+}
+
+message ListCapabilitiesResponse {
+  repeated ToolCapability capabilities = 1;
+}
+
+message RunToolRequest {
+  string adapter_id = 1;
+  repeated string arguments = 2;
+  string working_directory = 3;
+  bool confirmed_mutation = 4;
+}
+
+message CancelOperationRequest {
+  string operation_id = 1;
+}
+
+message CancelOperationResponse {
+  bool accepted = 1;
+}
+
+message ListAuditEventsRequest {
+  uint32 limit = 1;
+}
+
+message AuditEvent {
+  int64 id = 1;
+  string occurred_at = 2;
+  string action = 3;
+  string resource_id = 4;
+  string outcome = 5;
+  string detail = 6;
+}
+
+message ListAuditEventsResponse {
+  repeated AuditEvent events = 1;
+}
+
+enum DatabaseEngine {
+  DATABASE_ENGINE_UNSPECIFIED = 0;
+  DATABASE_ENGINE_POSTGRES = 1;
+  DATABASE_ENGINE_MYSQL = 2;
+  DATABASE_ENGINE_REDIS = 3;
+}
+
+message DatabaseProfile {
+  string id = 1;
+  string label = 2;
+  DatabaseEngine engine = 3;
+  string hostname = 4;
+  uint32 port = 5;
+  string database_name = 6;
+  string username = 7;
+  string secret_reference = 8;
+  string tunnel_id = 9;
+  bool read_only = 10;
+  bool auto_start_tunnel = 11;
+}
+
+message ListDatabaseProfilesRequest {}
+
+message ListDatabaseProfilesResponse {
+  repeated DatabaseProfile profiles = 1;
+}
+
+message SaveDatabaseProfileRequest {
+  DatabaseProfile profile = 1;
+}
+
+message DeleteDatabaseProfileRequest {
+  string profile_id = 1;
+}
+
+message DeleteDatabaseProfileResponse {
+  bool deleted = 1;
+}
+
+message RunDatabaseQueryRequest {
+  string profile_id = 1;
+  bytes secret_value = 2;
+  string sql = 3;
+  bool confirmed_mutation = 4;
+  bytes tunnel_ssh_auth_secret = 5;
+}
+
+message ExportBackupRequest {}
+
+message ExportBackupResponse {
+  bytes payload = 1;
+}
+
+message RestoreBackupRequest {
+  bytes payload = 1;
+  bool confirmed_replace = 2;
+}
+
+message RestoreBackupResponse {
+  uint32 host_count = 1;
+  uint32 tunnel_count = 2;
+  uint32 database_profile_count = 3;
+  uint32 audit_event_count = 4;
+}
