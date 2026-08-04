@@ -252,6 +252,7 @@ private struct AegizInteractiveRowModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(
@@ -298,6 +299,7 @@ private struct AegizHoverBackgroundModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: AegizTheme.Radius.control)
                     .fill(

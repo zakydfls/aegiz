@@ -325,9 +325,11 @@ struct FilesView: View {
                             select(entry)
                         } label: {
                             SFTPEntryRow(entry: entry)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                    .aegizInteractiveRow(isSelected: selectedEntryID == entry.id)
+                        .aegizInteractiveRow(isSelected: selectedEntryID == entry.id)
                         .simultaneousGesture(TapGesture(count: 2).onEnded {
                             open(entry)
                         })

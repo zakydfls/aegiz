@@ -289,6 +289,8 @@ struct CommandCenterView: View {
                     .frame(minWidth: 720)
                 compactHostRow(host)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .aegizInteractiveRow(isSelected: model.selectedHostID == host.id)

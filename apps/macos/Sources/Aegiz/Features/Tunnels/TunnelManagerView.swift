@@ -78,9 +78,21 @@ struct TunnelManagerView: View {
                         .buttonStyle(.borderedProminent)
                 }
             } else {
-                List(selection: $model.selectedTunnelID) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(groups) { group in
-                        Section {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack {
+                                Text(group.title)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text("\(group.tunnels.count)")
+                                    .font(.system(size: 10).monospacedDigit())
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 10)
+                            .frame(height: 24)
                             ForEach(group.tunnels) { tunnel in
                                 TunnelRow(
                                     tunnel: tunnel,
@@ -91,21 +103,12 @@ struct TunnelManagerView: View {
                                     select: { model.selectedTunnelID = tunnel.id },
                                     toggle: { Task { await model.toggleTunnel(tunnel) } }
                                 )
-                                .tag(tunnel.id)
-                            }
-                        } header: {
-                            HStack {
-                                Text(group.title)
-                                Spacer()
-                                Text("\(group.tunnels.count)")
-                                    .monospacedDigit()
-                                    .foregroundStyle(.tertiary)
                             }
                         }
                     }
                 }
-                .listStyle(.inset)
-                .scrollContentBackground(.hidden)
+                .padding(12)
+                }
             }
         }
         .background(AegizTheme.raised)
@@ -207,9 +210,10 @@ private struct TunnelRow: View {
                     : "Start \(tunnel.label)"
             )
         }
-        .aegizInteractiveRow(isSelected: isSelected)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture().onEnded(select))
+        .aegizInteractiveRow(isSelected: isSelected)
+        .onTapGesture(perform: select)
         .onTapGesture(count: 2) {
             guard canStart else { return }
             toggle()
