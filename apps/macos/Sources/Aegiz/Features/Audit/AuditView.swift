@@ -87,6 +87,7 @@ struct AuditView: View {
                             .aegizInteractiveRow(isSelected: selectedEventID == event.id)
                     }
                     .listStyle(.inset)
+                    .scrollContentBackground(.hidden)
                     .frame(minWidth: 390)
                     auditDetail
                         .frame(minWidth: 240, idealWidth: 290)

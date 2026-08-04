@@ -87,10 +87,10 @@ struct TunnelManagerView: View {
                                     route: model.tunnelRoute(for: tunnel),
                                     isSelected: model.selectedTunnelID == tunnel.id,
                                     isChanging: model.tunnelOperationID == tunnel.id,
-                                    hasPortConflict: model.tunnelPortConflictIDs.contains(tunnel.id)
-                                ) {
-                                    Task { await model.toggleTunnel(tunnel) }
-                                }
+                                    hasPortConflict: model.tunnelPortConflictIDs.contains(tunnel.id),
+                                    select: { model.selectedTunnelID = tunnel.id },
+                                    toggle: { Task { await model.toggleTunnel(tunnel) } }
+                                )
                                 .tag(tunnel.id)
                             }
                         } header: {
@@ -105,6 +105,7 @@ struct TunnelManagerView: View {
                     }
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
             }
         }
         .background(AegizTheme.raised)
@@ -142,6 +143,7 @@ private struct TunnelRow: View {
     let isSelected: Bool
     let isChanging: Bool
     let hasPortConflict: Bool
+    let select: () -> Void
     let toggle: () -> Void
 
     var body: some View {
@@ -207,6 +209,7 @@ private struct TunnelRow: View {
         }
         .aegizInteractiveRow(isSelected: isSelected)
         .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture().onEnded(select))
         .onTapGesture(count: 2) {
             guard canStart else { return }
             toggle()

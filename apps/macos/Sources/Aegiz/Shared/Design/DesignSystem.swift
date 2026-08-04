@@ -264,7 +264,18 @@ private struct AegizInteractiveRowModifier: ViewModifier {
                                 : .clear
                     )
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: AegizTheme.Radius.control)
+                    .stroke(
+                        isSelected
+                            ? AegizTheme.accent.opacity(0.58)
+                            : isHovered ? AegizTheme.subtleBorder : .clear,
+                        lineWidth: isSelected ? 1 : 0.8
+                    )
+            )
             .contentShape(Rectangle())
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
             .accessibilityAddTraits(isSelected ? .isSelected : [])
             .onHover { isHovered = $0 }
             .animation(stateAnimation, value: isHovered)
@@ -327,6 +338,17 @@ private struct AegizIconActionModifier: ViewModifier {
     }
 }
 
+private struct AegizControlSurfaceModifier: ViewModifier {
+    let radius: CGFloat
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        content
+            .background(AegizTheme.raised, in: shape)
+            .overlay(shape.stroke(AegizTheme.subtleBorder, lineWidth: 0.8))
+    }
+}
+
 extension View {
     func aegizInteractiveRow(isSelected: Bool = false) -> some View {
         modifier(AegizInteractiveRowModifier(isSelected: isSelected))
@@ -349,5 +371,9 @@ extension View {
             idealHeight: size.idealHeight,
             maxHeight: size.maxHeight
         )
+    }
+
+    func aegizControlSurface(radius: CGFloat = AegizTheme.Radius.control) -> some View {
+        modifier(AegizControlSurfaceModifier(radius: radius))
     }
 }

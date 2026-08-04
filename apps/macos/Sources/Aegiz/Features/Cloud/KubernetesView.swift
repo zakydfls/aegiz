@@ -187,6 +187,7 @@ struct KubernetesView: View {
                     .tag(resource.id)
                     .aegizInteractiveRow(isSelected: selectedResourceID == resource.id)
                 }
+                .scrollContentBackground(.hidden)
                 .frame(minWidth: 420, idealWidth: 590)
                 resourceInspector
                     .frame(minWidth: 300, idealWidth: 360)

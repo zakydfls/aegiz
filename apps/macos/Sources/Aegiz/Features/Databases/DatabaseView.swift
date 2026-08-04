@@ -129,6 +129,7 @@ struct DatabaseView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
     }
 
     @ViewBuilder

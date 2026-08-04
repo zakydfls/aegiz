@@ -1,10 +1,10 @@
-import AppKit
 import SwiftUI
 
 struct RootView: View {
     @Bindable var model: AppModel
-    @State private var inspectorPresented = true
-    @State private var availableWidth: CGFloat = 1_200
+    // The inspector is user-controlled. Automatically adding/removing an
+    // entire split-view column during navigation causes AppKit resize churn.
+    @State private var inspectorPresented = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -18,11 +18,11 @@ struct RootView: View {
         } detail: {
             content
                 .frame(
-                    maxWidth: .infinity,
-                    maxHeight: .infinity,
-                    alignment: .topLeading
-                )
-                .navigationSplitViewColumnWidth(min: 480, ideal: 920)
+                maxWidth: .infinity,
+                maxHeight: .infinity,
+                alignment: .topLeading
+            )
+            .navigationSplitViewColumnWidth(min: 480, ideal: 920)
         }
         .inspector(isPresented: $inspectorPresented) {
             Inspector(model: model)
@@ -30,11 +30,6 @@ struct RootView: View {
         }
         .tint(AegizTheme.accent)
         .background(AegizTheme.canvas)
-        .background {
-            WindowWidthReader { width in
-                updateInspector(for: width)
-            }
-        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -44,15 +39,13 @@ struct RootView: View {
                 }
                 .disabled(model.isBusy || model.connectionState != .online)
             }
-            if supportsInspector {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        inspectorPresented.toggle()
-                    } label: {
-                        Label("Toggle Inspector", systemImage: "sidebar.right")
-                    }
-                    .help(inspectorPresented ? "Hide inspector" : "Show inspector")
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    inspectorPresented.toggle()
+                } label: {
+                    Label("Toggle Inspector", systemImage: "sidebar.right")
                 }
+                .help(inspectorPresented ? "Hide inspector" : "Show inspector")
             }
         }
         .overlay(alignment: .bottom) {
@@ -80,23 +73,6 @@ struct RootView: View {
         .sheet(isPresented: $model.showingDatabaseProfileEditor) {
             DatabaseProfileEditorView(model: model)
         }
-        .onChange(of: model.selectedSection) { _, _ in
-            inspectorPresented = supportsInspector
-                && availableWidth >= AegizTheme.Layout.inspectorRevealWidth
-        }
-    }
-
-    private var supportsInspector: Bool {
-        switch model.selectedSection ?? .commandCenter {
-        case .commandCenter, .hosts, .sessions, .tunnels: true
-        default: false
-        }
-    }
-
-    private func updateInspector(for width: CGFloat) {
-        availableWidth = width
-        inspectorPresented = supportsInspector
-            && width >= AegizTheme.Layout.inspectorRevealWidth
     }
 
     @ViewBuilder
@@ -127,68 +103,6 @@ struct RootView: View {
         case .audit:
             AuditView(model: model)
         }
-    }
-}
-
-/// Reads the containing window instead of the split view's proposed width. The
-/// latter already excludes an open inspector, which can keep the inspector open
-/// while squeezing the navigation sidebar at compact window sizes.
-private struct WindowWidthReader: NSViewRepresentable {
-    let onChange: (CGFloat) -> Void
-
-    func makeNSView(context: Context) -> WindowWidthProbeView {
-        let view = WindowWidthProbeView()
-        view.onChange = onChange
-        return view
-    }
-
-    func updateNSView(_ nsView: WindowWidthProbeView, context: Context) {
-        nsView.onChange = onChange
-        nsView.reportCurrentWidth()
-    }
-}
-
-private final class WindowWidthProbeView: NSView {
-    var onChange: ((CGFloat) -> Void)?
-    private weak var observedWindow: NSWindow?
-    private var lastReportedWidth: CGFloat?
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        observeWindow()
-    }
-
-    func reportCurrentWidth() {
-        guard let width = window?.frame.width else { return }
-        guard lastReportedWidth.map({ abs($0 - width) >= 1 }) ?? true else { return }
-        lastReportedWidth = width
-        DispatchQueue.main.async { [weak self] in
-            self?.onChange?(width)
-        }
-    }
-
-    private func observeWindow() {
-        if let observedWindow {
-            NotificationCenter.default.removeObserver(
-                self,
-                name: NSWindow.didResizeNotification,
-                object: observedWindow
-            )
-        }
-
-        observedWindow = window
-        guard let window else { return }
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(windowDidResize(_:)),
-            name: NSWindow.didResizeNotification,
-            object: window,
-        )
-        reportCurrentWidth()
-    }
-
-    @objc private func windowDidResize(_ notification: Notification) {
-        reportCurrentWidth()
     }
 }
 
@@ -329,7 +243,10 @@ private struct CommandPaletteView: View {
                 }
             }
             .listStyle(.inset)
+            .scrollContentBackground(.hidden)
         }
+        .padding(8)
+        .background(AegizTheme.canvas)
         .aegizAdaptiveSheet(AegizSheetSizingPolicy.commandPalette)
     }
 }
@@ -382,7 +299,11 @@ private struct Sidebar: View {
             count: count,
             isSelected: model.selectedSection == section
         ) {
-            model.selectedSection = section
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                model.selectedSection = section
+            }
         }
     }
 }

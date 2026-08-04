@@ -293,6 +293,7 @@ struct AutomationView: View {
                         .font(.system(size: 10).monospaced())
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
             }
         }
         .padding(12)

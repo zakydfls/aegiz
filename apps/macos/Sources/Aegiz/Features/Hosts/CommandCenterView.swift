@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct CommandCenterView: View {
@@ -141,11 +142,7 @@ struct CommandCenterView: View {
         }
         .padding(.horizontal, 9)
         .frame(minWidth: 150, idealWidth: 210, maxWidth: 250, minHeight: 28)
-        .background(AegizTheme.raised, in: RoundedRectangle(cornerRadius: 7))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(AegizTheme.subtleBorder, lineWidth: 1)
-        }
+        .aegizControlSurface()
     }
 
     private var smartFilter: some View {
@@ -243,90 +240,146 @@ struct CommandCenterView: View {
     }
 
     private var hostTable: some View {
-        Table(model.visibleHosts, selection: $model.selectedHostID) {
-            TableColumn("Host") { host in
-                hostCell(host) {
-                    HStack(spacing: 8) {
-                    Image(
-                        systemName: model.hostOrganization(for: host.id).favorite
-                            ? "star.fill" : "server.rack"
-                    )
-                    .foregroundStyle(
-                        model.hostOrganization(for: host.id).favorite ? .yellow : AegizTheme.accent
-                    )
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(host.alias)
-                            .font(.system(size: 12, weight: .medium))
-                        Text(host.hostname)
-                            .font(.system(size: 10).monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                    }
-                    .padding(.vertical, 3)
-                }
-                .contextMenu {
-                    Button("Open SSH Session") { model.openSession(host) }
-                    Divider()
-                    Text(host.source)
+        ScrollView {
+            LazyVStack(spacing: 3) {
+                hostColumnHeader
+                ForEach(model.visibleHosts) { host in
+                    hostRow(host)
                 }
             }
-            .width(min: 190, ideal: 230)
-
-            TableColumn("User") { host in
-                hostCell(host) {
-                    Text(host.user.isEmpty ? "Default" : host.user)
-                        .foregroundStyle(host.user.isEmpty ? .secondary : .primary)
-                }
-            }
-            .width(min: 90, ideal: 110)
-
-            TableColumn("Port") { host in
-                hostCell(host) {
-                    Text(host.port, format: .number)
-                        .monospacedDigit()
-                }
-            }
-            .width(54)
-
-            TableColumn("Route") { host in
-                hostCell(host) {
-                    if host.proxyJump.isEmpty {
-                        Label("Direct", systemImage: "arrow.right")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Label(host.proxyJump, systemImage: "arrow.triangle.branch")
-                    }
-                }
-            }
-            .width(min: 110, ideal: 160)
-
-            TableColumn("Environment") { host in
-                hostCell(host) {
-                    let metadata = model.hostOrganization(for: host.id)
-                    Text(metadata.environment.isEmpty ? "Unassigned" : metadata.environment)
-                        .foregroundStyle(metadata.environment.isEmpty ? .secondary : .primary)
-                }
-            }
-            .width(min: 90, ideal: 120)
+            .padding(12)
         }
-        .tableStyle(.inset(alternatesRowBackgrounds: true))
+        .scrollIndicators(.automatic)
         .onKeyPress(.return) {
             openSelectedHost()
             return model.selectedHostID == nil ? .ignored : .handled
         }
-        .help("Double-click a host or press Return to open its SSH session")
+        .help("Click to select a host. Double-click or press Return to open SSH.")
     }
 
-    private func hostCell<Content: View>(
-        _ host: HostModel,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        content()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2) {
-                model.openSession(host)
+    private var hostColumnHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                Text("Host").frame(minWidth: 210, maxWidth: .infinity, alignment: .leading)
+                Text("User").frame(width: 126, alignment: .leading)
+                Text("Port").frame(width: 56, alignment: .leading)
+                Text("Route").frame(minWidth: 140, maxWidth: .infinity, alignment: .leading)
+                Text("Environment").frame(width: 128, alignment: .leading)
             }
+            .frame(minWidth: 720)
+
+            HStack(spacing: 12) {
+                Text("Host")
+                Spacer()
+                Text("Access")
+            }
+        }
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10)
+        .frame(height: 26)
+    }
+
+    private func hostRow(_ host: HostModel) -> some View {
+        Button {
+            model.selectedHostID = host.id
+        } label: {
+            ViewThatFits(in: .horizontal) {
+                fullHostRow(host)
+                    .frame(minWidth: 720)
+                compactHostRow(host)
+            }
+        }
+        .buttonStyle(.plain)
+        .aegizInteractiveRow(isSelected: model.selectedHostID == host.id)
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            model.selectedHostID = host.id
+            model.openSession(host)
+        })
+        .onHover { isHovered in
+            if isHovered {
+                NSCursor.pointingHand.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+        }
+        .contextMenu {
+            Button("Open SSH Session") { model.openSession(host) }
+            Divider()
+            Text(host.source)
+        }
+        .accessibilityHint("Double-click to open an SSH session")
+    }
+
+    private func fullHostRow(_ host: HostModel) -> some View {
+        let metadata = model.hostOrganization(for: host.id)
+        return HStack(spacing: 12) {
+            hostIdentity(host)
+                .frame(minWidth: 210, maxWidth: .infinity, alignment: .leading)
+            Text(host.user.isEmpty ? "Default" : host.user)
+                .foregroundStyle(host.user.isEmpty ? .secondary : .primary)
+                .frame(width: 126, alignment: .leading)
+            Text(host.port, format: .number)
+                .monospacedDigit()
+                .frame(width: 56, alignment: .leading)
+            hostRoute(host)
+                .frame(minWidth: 140, maxWidth: .infinity, alignment: .leading)
+            Text(metadata.environment.isEmpty ? "Unassigned" : metadata.environment)
+                .foregroundStyle(metadata.environment.isEmpty ? .secondary : .primary)
+                .frame(width: 128, alignment: .leading)
+        }
+        .padding(.horizontal, 10)
+        .frame(minHeight: 50)
+    }
+
+    private func compactHostRow(_ host: HostModel) -> some View {
+        HStack(spacing: 10) {
+            hostIdentity(host)
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("\(host.user.isEmpty ? "Default" : host.user) · \(host.port)")
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                hostRoute(host)
+                    .font(.system(size: 10))
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(minHeight: 50)
+    }
+
+    private func hostIdentity(_ host: HostModel) -> some View {
+        HStack(spacing: 9) {
+            Image(
+                systemName: model.hostOrganization(for: host.id).favorite
+                    ? "star.fill" : "server.rack"
+            )
+            .foregroundStyle(
+                model.hostOrganization(for: host.id).favorite ? .yellow : AegizTheme.accent
+            )
+            .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(host.alias)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                Text(host.hostname)
+                    .font(.system(size: 10).monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private func hostRoute(_ host: HostModel) -> some View {
+        Group {
+            if host.proxyJump.isEmpty {
+                Label("Direct", systemImage: "arrow.right")
+                    .foregroundStyle(.secondary)
+            } else {
+                Label(host.proxyJump, systemImage: "arrow.triangle.branch")
+                    .lineLimit(1)
+            }
+        }
     }
 
     private func openSelectedHost() {

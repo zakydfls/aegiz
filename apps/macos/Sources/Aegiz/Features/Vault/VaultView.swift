@@ -36,6 +36,7 @@ struct VaultView: View {
                             }
                     }
                     .listStyle(.inset)
+                    .scrollContentBackground(.hidden)
                     .frame(minWidth: 300, idealWidth: 370)
                     secretDetail
                         .frame(minWidth: 300, idealWidth: 390)

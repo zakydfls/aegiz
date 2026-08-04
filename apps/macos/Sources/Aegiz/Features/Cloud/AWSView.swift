@@ -185,6 +185,7 @@ struct AWSView: View {
                     .tag(item.id)
                     .aegizInteractiveRow(isSelected: selectedResourceID == item.id)
                 }
+                .scrollContentBackground(.hidden)
                 .frame(minWidth: 420, idealWidth: 590)
                 resourceInspector
                     .frame(minWidth: 300, idealWidth: 360)

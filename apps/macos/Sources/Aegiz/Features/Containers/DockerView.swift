@@ -294,6 +294,7 @@ struct DockerView: View {
                 .tag(item.id)
                 .aegizInteractiveRow(isSelected: selectedContainerID == item.id)
             }
+            .scrollContentBackground(.hidden)
         case .images:
             List(images, selection: $selectedImageID) { item in
                 HStack {
@@ -311,6 +312,7 @@ struct DockerView: View {
                 .tag(item.id)
                 .aegizInteractiveRow(isSelected: selectedImageID == item.id)
             }
+            .scrollContentBackground(.hidden)
         case .compose:
             List(composeProjects, selection: $selectedComposeID) { item in
                 VStack(alignment: .leading, spacing: 3) {
@@ -325,6 +327,7 @@ struct DockerView: View {
                 .tag(item.id)
                 .aegizInteractiveRow(isSelected: selectedComposeID == item.id)
             }
+            .scrollContentBackground(.hidden)
         }
     }
 

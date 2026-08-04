@@ -81,6 +81,9 @@ struct FilesView: View {
     @State private var transferWorker: Task<Void, Never>?
     @State private var isDropTargeted = false
     @State private var compactInspectorExpanded = false
+    @State private var isListing = false
+    @State private var hasLoadedListing = false
+    @State private var listingRequestID: UUID?
 
     private var host: HostModel? { model.selectedHost }
     private var selectedEntry: SFTPEntryModel? {
@@ -159,6 +162,9 @@ struct FilesView: View {
                 chmodValue = mode
             }
         }
+        .task(id: listingContextID) {
+            await loadInitialListing()
+        }
     }
 
     private var header: some View {
@@ -177,6 +183,7 @@ struct FilesView: View {
                         selectedEntryID = nil
                         remotePath = "."
                         newFolderName = ""
+                        hasLoadedListing = false
                     }
                 )
             ) {
@@ -187,6 +194,10 @@ struct FilesView: View {
             .frame(width: 190)
             .help("Choose the remote SSH host")
         }
+    }
+
+    private var listingContextID: String {
+        "\(model.selectedHostID ?? "")-\(capability?.available == true)"
     }
 
     private var routeBar: some View {
@@ -287,29 +298,61 @@ struct FilesView: View {
 
     @ViewBuilder
     private func fileListing(_ host: HostModel) -> some View {
-        if entries.isEmpty {
+        if isListing && !hasLoadedListing {
+            AegizWorkspaceStateView(
+                "Loading \(remotePath)",
+                message: "Reading the remote directory through \(host.alias).",
+                symbol: "arrow.triangle.2.circlepath"
+            ) {
+                ProgressView()
+            }
+        } else if entries.isEmpty {
             ContentUnavailableView(
-                "No listing loaded",
+                hasLoadedListing ? "This directory is empty" : "No listing loaded",
                 systemImage: "folder",
-                description: Text("Choose Refresh to read \(remotePath) through \(host.alias).")
+                description: Text(
+                    hasLoadedListing
+                        ? "\(remotePath) on \(host.alias) has no visible entries."
+                        : "Choose Refresh to read \(remotePath) through \(host.alias)."
+                )
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            List(entries, selection: $selectedEntryID) { entry in
-                SFTPEntryRow(entry: entry)
-                    .tag(entry.id)
+            ScrollView {
+                LazyVStack(spacing: 3) {
+                    ForEach(entries) { entry in
+                        Button {
+                            select(entry)
+                        } label: {
+                            SFTPEntryRow(entry: entry)
+                        }
+                        .buttonStyle(.plain)
                     .aegizInteractiveRow(isSelected: selectedEntryID == entry.id)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        if entry.isDirectory {
-                            remotePath = entry.path
-                            refreshListing()
-                        } else {
-                            preview(entry)
+                        .simultaneousGesture(TapGesture(count: 2).onEnded {
+                            open(entry)
+                        })
+                        .contextMenu {
+                            Button(entry.isDirectory ? "Open Folder" : "Preview") {
+                                open(entry)
+                            }
+                            if !entry.isDirectory {
+                                Button("Download…") {
+                                    select(entry)
+                                    downloadSelected()
+                                }
+                            }
                         }
                     }
+                }
+                .padding(12)
             }
-            .listStyle(.inset)
+            .overlay(alignment: .topTrailing) {
+                if isListing {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(12)
+                }
+            }
         }
     }
 
@@ -592,6 +635,16 @@ struct FilesView: View {
         return message
     }
 
+    private func loadInitialListing() async {
+        guard let host, capability?.available == true else { return }
+        remotePath = "."
+        entries = []
+        selectedEntryID = nil
+        newFolderName = ""
+        hasLoadedListing = false
+        await loadListing(host: host, path: remotePath)
+    }
+
     private func refreshListing() {
         guard let host else { return }
         let path = remotePath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -600,17 +653,56 @@ struct FilesView: View {
             return
         }
         remotePath = path
-        Task {
-            let result = await model.runSFTPOperation(
-                host: host,
-                operation: "list",
-                fields: [path],
-                confirmedMutation: false
-            )
-            if result?.success == true {
-                entries = SFTPListingParser.parse(result?.output ?? "", directory: path)
-                selectedEntryID = nil
+        Task { await loadListing(host: host, path: path) }
+    }
+
+    private func loadListing(host: HostModel, path: String) async {
+        let requestID = UUID()
+        listingRequestID = requestID
+        isListing = true
+        defer {
+            if listingRequestID == requestID {
+                isListing = false
             }
+        }
+
+        let result = await model.runSFTPOperation(
+            host: host,
+            operation: "list",
+            fields: [path],
+            confirmedMutation: false
+        )
+        guard !Task.isCancelled,
+              listingRequestID == requestID,
+              model.selectedHostID == host.id,
+              remotePath == path
+        else {
+            return
+        }
+        guard result?.success == true else {
+            hasLoadedListing = false
+            return
+        }
+        entries = SFTPListingParser.parse(result?.output ?? "", directory: path)
+        selectedEntryID = nil
+        hasLoadedListing = true
+    }
+
+    private func select(_ entry: SFTPEntryModel) {
+        selectedEntryID = entry.id
+        renameValue = entry.name
+        if let mode = Self.octalMode(from: entry.permissions) {
+            chmodValue = mode
+        }
+    }
+
+    private func open(_ entry: SFTPEntryModel) {
+        select(entry)
+        if entry.isDirectory {
+            remotePath = entry.path
+            refreshListing()
+        } else {
+            preview(entry)
         }
     }
 
