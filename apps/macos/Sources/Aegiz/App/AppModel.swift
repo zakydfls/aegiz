@@ -24,7 +24,7 @@ final class AppModel {
     var isBusy = false
     var terminalSessions: [TerminalSessionModel] = []
     var selectedTerminalSessionID: UUID?
-    var splitTerminalSessionID: UUID?
+    var splitTerminalSession: TerminalSessionModel?
     var terminalSplitAxis = TerminalSplitAxis.horizontal
     var showingNewTunnel = false
     var showingCommandPalette = false
@@ -130,10 +130,6 @@ final class AppModel {
         terminalSessions.first { $0.id == selectedTerminalSessionID }
     }
 
-    var splitTerminalSession: TerminalSessionModel? {
-        terminalSessions.first { $0.id == splitTerminalSessionID }
-    }
-
     var sessionHost: HostModel? {
         guard let session = selectedTerminalSession else { return nil }
         return hosts.first { $0.id == session.hostID }
@@ -233,33 +229,38 @@ final class AppModel {
     }
 
     func createTerminalSplit(_ session: TerminalSessionModel, axis: TerminalSplitAxis) {
-        if splitTerminalSessionID != nil {
+        if splitTerminalSession != nil {
             closeTerminalSplit()
         }
         var duplicate = session
         duplicate.id = UUID()
         duplicate.createdAt = Date()
         duplicate.generation = UUID()
-        terminalSessions.append(duplicate)
-        splitTerminalSessionID = duplicate.id
+        splitTerminalSession = duplicate
         terminalSplitAxis = axis
-        persistTerminalSessions()
     }
 
     func closeTerminalSplit() {
-        guard let splitID = splitTerminalSessionID else { return }
-        terminalControllers[splitID] = nil
-        terminalSessions = TerminalSessionLifecycle.removing(splitID, from: terminalSessions)
-        splitTerminalSessionID = nil
-        persistTerminalSessions()
+        guard let splitTerminalSession else { return }
+        terminalControllers[splitTerminalSession.id] = nil
+        self.splitTerminalSession = nil
+    }
+
+    func focusOtherTerminalSplit() {
+        guard let primary = selectedTerminalSession,
+              let split = splitTerminalSession,
+              primary.id != split.id
+        else {
+            return
+        }
+        let target = terminalController(for: split).view.hasTerminalFocus ? primary : split
+        terminalController(for: target).view.requestTerminalFocus()
     }
 
     func closeTerminalSession(_ session: TerminalSessionModel) {
+        closeTerminalSplit()
         terminalControllers[session.id] = nil
         terminalSessions.removeAll { $0.id == session.id }
-        if splitTerminalSessionID == session.id {
-            splitTerminalSessionID = nil
-        }
         if selectedTerminalSessionID == session.id {
             selectedTerminalSessionID = terminalSessions.last?.id
         }

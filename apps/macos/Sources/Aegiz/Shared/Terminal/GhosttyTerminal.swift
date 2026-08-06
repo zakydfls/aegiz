@@ -6,7 +6,15 @@ private let aegizGhosttyWakeupCallback: ghostty_runtime_wakeup_cb = { _ in
     GhosttyRuntime.shared.requestTick()
 }
 
-private let aegizGhosttyActionCallback: ghostty_runtime_action_cb = { _, _, _ in false }
+private let aegizGhosttyActionCallback: ghostty_runtime_action_cb = { _, _, action in
+    switch action.tag {
+    case GHOSTTY_ACTION_START_SEARCH, GHOSTTY_ACTION_END_SEARCH,
+         GHOSTTY_ACTION_SEARCH_TOTAL, GHOSTTY_ACTION_SEARCH_SELECTED:
+        true
+    default:
+        false
+    }
+}
 private let aegizGhosttyReadClipboardCallback: ghostty_runtime_read_clipboard_cb = {
     _, _, _ in false
 }
@@ -326,6 +334,10 @@ final class GhosttyTerminalContainerView: NSView {
             }
         }
     }
+
+    var hasTerminalFocus: Bool {
+        window?.firstResponder === terminalView
+    }
 }
 
 private final class GhosttySurfaceHandle: @unchecked Sendable {
@@ -343,6 +355,7 @@ private final class GhosttySurfaceHandle: @unchecked Sendable {
 final class EmbeddedGhosttyNSView: NSView {
     private var surfaceHandle: GhosttySurfaceHandle?
     private var trackingArea: NSTrackingArea?
+    private var searchField: NSSearchField?
     private var windowObservers: [NSObjectProtocol] = []
     private var lastFramebufferMetrics: GhosttyFramebufferMetrics?
     private(set) var reportedVisible: Bool?
@@ -474,6 +487,7 @@ final class EmbeddedGhosttyNSView: NSView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         updateSurfaceMetrics()
+        layoutSearchField()
     }
 
     override func viewDidHide() {
@@ -516,6 +530,9 @@ final class EmbeddedGhosttyNSView: NSView {
             return super.performKeyEquivalent(with: event)
         }
         switch character {
+        case "f":
+            beginSearch()
+            return true
         case "v":
             guard let value = NSPasteboard.general.string(forType: .string) else { return true }
             sendText(value)
@@ -576,12 +593,23 @@ final class EmbeddedGhosttyNSView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard let surface else { return }
+        // libghostty needs these bits to distinguish trackpad pixels from
+        // mouse-wheel lines; omitting them makes a trackpad scroll too far.
+        let multiplier = event.hasPreciseScrollingDeltas ? 0.65 : 0.70
         ghostty_surface_mouse_scroll(
             surface,
-            Double(event.scrollingDeltaX),
-            Double(event.scrollingDeltaY),
-            0
+            Double(event.scrollingDeltaX) * multiplier,
+            Double(event.scrollingDeltaY) * multiplier,
+            Self.ghosttyScrollModifiers(for: event)
         )
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        guard searchField?.isHidden == false else {
+            super.cancelOperation(sender)
+            return
+        }
+        endSearch()
     }
 
     private func updateSurfaceMetrics() {
@@ -670,6 +698,55 @@ final class EmbeddedGhosttyNSView: NSView {
         }
     }
 
+    private func beginSearch() {
+        _ = performBindingAction("start_search")
+        let field = searchField ?? makeSearchField()
+        field.isHidden = false
+        layoutSearchField()
+        window?.makeFirstResponder(field)
+        field.selectText(nil)
+    }
+
+    private func endSearch() {
+        _ = performBindingAction("end_search")
+        searchField?.isHidden = true
+        window?.makeFirstResponder(self)
+    }
+
+    private func makeSearchField() -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = "Find in terminal"
+        field.sendsSearchStringImmediately = true
+        field.target = self
+        field.action = #selector(updateSearch(_:))
+        field.autoresizingMask = [.minXMargin, .minYMargin]
+        addSubview(field)
+        searchField = field
+        return field
+    }
+
+    @objc private func updateSearch(_ sender: NSSearchField) {
+        _ = performBindingAction("search:\(sender.stringValue)")
+    }
+
+    private func layoutSearchField() {
+        guard let searchField, !searchField.isHidden else { return }
+        searchField.frame = NSRect(
+            x: max(12, bounds.maxX - 252),
+            y: max(8, bounds.maxY - 40),
+            width: min(240, max(120, bounds.width - 24)),
+            height: 28
+        )
+    }
+
+    @discardableResult
+    private func performBindingAction(_ action: String) -> Bool {
+        guard let surface else { return false }
+        return action.withCString { pointer in
+            ghostty_surface_binding_action(surface, pointer, UInt(action.utf8.count))
+        }
+    }
+
     private func copySelection() -> Bool {
         guard let surface else { return false }
         var text = ghostty_text_s()
@@ -734,6 +811,12 @@ final class EmbeddedGhosttyNSView: NSView {
         if flags.contains(.command) { raw |= GHOSTTY_MODS_SUPER.rawValue }
         if flags.contains(.capsLock) { raw |= GHOSTTY_MODS_CAPS.rawValue }
         return ghostty_input_mods_e(raw)
+    }
+
+    private static func ghosttyScrollModifiers(for event: NSEvent) -> ghostty_input_scroll_mods_t {
+        let precision = event.hasPreciseScrollingDeltas ? 1 : 0
+        let momentum = Int32(event.momentumPhase.rawValue) << 1
+        return ghostty_input_scroll_mods_t(Int32(precision) | momentum)
     }
 
     nonisolated static func presentationVisibility(

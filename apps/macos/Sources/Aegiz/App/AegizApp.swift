@@ -52,6 +52,33 @@ struct AegizApp: App {
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
             }
+            CommandMenu("Terminal") {
+                Button("Split Right") {
+                    guard let session = model.selectedTerminalSession else { return }
+                    model.createTerminalSplit(session, axis: .horizontal)
+                }
+                .keyboardShortcut("d", modifiers: .command)
+                .disabled(model.selectedTerminalSession == nil)
+
+                Button("Split Down") {
+                    guard let session = model.selectedTerminalSession else { return }
+                    model.createTerminalSplit(session, axis: .vertical)
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(model.selectedTerminalSession == nil)
+
+                Button("Focus Other Split") {
+                    model.focusOtherTerminalSplit()
+                }
+                .keyboardShortcut("]", modifiers: .command)
+                .disabled(model.splitTerminalSession == nil)
+
+                Button("Close Split") {
+                    model.closeTerminalSplit()
+                }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
+                .disabled(model.splitTerminalSession == nil)
+            }
             CommandMenu("Infrastructure") {
                 Button("Import SSH Config") {
                     Task { await model.importSSHConfig() }
