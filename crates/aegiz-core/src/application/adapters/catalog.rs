@@ -14,8 +14,8 @@ use tokio::process::Command;
 pub(super) struct ToolSpec {
     pub(super) id: &'static str,
     pub(super) label: &'static str,
-    candidates: &'static [&'static str],
-    version_arguments: &'static [&'static str],
+    pub(super) candidates: &'static [&'static str],
+    pub(super) version_arguments: &'static [&'static str],
     pub(super) runnable: bool,
 }
 

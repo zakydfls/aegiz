@@ -148,6 +148,7 @@ message RunToolRequest {
   repeated string arguments = 2;
   string working_directory = 3;
   bool confirmed_mutation = 4;
+  bytes ssh_auth_secret = 5;
 }
 
 message CancelOperationRequest {

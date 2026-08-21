@@ -494,14 +494,14 @@ fn ssh_arguments_for_auth(
     arguments
 }
 
-struct AskpassBroker {
-    socket_path: PathBuf,
-    token: String,
+pub(crate) struct AskpassBroker {
+    pub(crate) socket_path: PathBuf,
+    pub(crate) token: String,
     delivery: oneshot::Receiver<std::result::Result<(), String>>,
 }
 
 impl AskpassBroker {
-    async fn bind(runtime_directory: &Path, secret: CredentialLease) -> Result<Self> {
+    pub(crate) async fn bind(runtime_directory: &Path, secret: CredentialLease) -> Result<Self> {
         // AF_UNIX paths are short on macOS. Keep the file name compact so the
         // private ~/Library/Caches/Aegiz directory remains usable.
         let identifier = Uuid::new_v4().simple().to_string();
@@ -549,6 +549,13 @@ impl AskpassBroker {
             delivery,
         })
     }
+}
+
+pub(crate) fn askpass_executable() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("aegiz-askpass")))
+        .unwrap_or_else(|| PathBuf::from("aegiz-askpass"))
 }
 
 enum AuthenticationOutcome {

@@ -1,4 +1,8 @@
-use crate::proto::{OperationEvent, ToolCapability};
+use crate::{
+    application::tunnels::{AskpassBroker, askpass_executable},
+    proto::{OperationEvent, ToolCapability},
+};
+use aegiz_platform::CredentialLease;
 use aegiz_storage::Store;
 use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
@@ -33,6 +37,7 @@ type EventSender = mpsc::Sender<Result<OperationEvent, tonic::Status>>;
 #[derive(Clone)]
 pub struct AdapterRuntime {
     store: Store,
+    runtime_directory: Arc<PathBuf>,
     cancellations: Arc<Mutex<HashMap<Uuid, oneshot::Sender<()>>>>,
     executable_overrides: Arc<HashMap<String, PathBuf>>,
     #[cfg(test)]
@@ -40,9 +45,10 @@ pub struct AdapterRuntime {
 }
 
 impl AdapterRuntime {
-    pub fn new(store: Store) -> Self {
+    pub fn new(store: Store, runtime_directory: PathBuf) -> Self {
         Self {
             store,
+            runtime_directory: Arc::new(runtime_directory),
             cancellations: Arc::new(Mutex::new(HashMap::new())),
             executable_overrides: Arc::new(HashMap::new()),
             #[cfg(test)]
@@ -110,20 +116,26 @@ impl AdapterRuntime {
         arguments: Vec<String>,
         working_directory: String,
         confirmed_mutation: bool,
+        authentication_secret: Vec<u8>,
         sender: EventSender,
     ) {
         let sequence = Arc::new(AtomicU64::new(1));
-        let result = self
-            .execute_inner(
-                operation_id,
-                &adapter_id,
-                &arguments,
-                &working_directory,
-                confirmed_mutation,
-                &sender,
-                sequence.clone(),
-            )
-            .await;
+        let result = match CredentialLease::new(authentication_secret) {
+            Ok(secret) => {
+                self.execute_inner(
+                    operation_id,
+                    &adapter_id,
+                    &arguments,
+                    &working_directory,
+                    confirmed_mutation,
+                    secret,
+                    &sender,
+                    sequence.clone(),
+                )
+                .await
+            }
+            Err(error) => Err(error.into()),
+        };
 
         self.cancellations.lock().await.remove(&operation_id);
         let (message, success, outcome, exit_code) = match result {
@@ -181,6 +193,7 @@ impl AdapterRuntime {
         arguments: &[String],
         working_directory: &str,
         confirmed_mutation: bool,
+        authentication_secret: CredentialLease,
         sender: &EventSender,
         sequence: Arc<AtomicU64>,
     ) -> Result<ExecutionOutcome> {
@@ -210,8 +223,17 @@ impl AdapterRuntime {
                 ),
             )
             .await?;
+        let broker = if adapter_id == "sftp" && !authentication_secret.is_empty() {
+            let executable = askpass_executable();
+            if !executable.is_file() {
+                bail!("Aegiz SSH password helper is missing from the app bundle");
+            }
+            Some(AskpassBroker::bind(&self.runtime_directory, authentication_secret).await?)
+        } else {
+            None
+        };
         let (process_arguments, standard_input) =
-            prepare_adapter_invocation(adapter_id, arguments).await?;
+            prepare_adapter_invocation(adapter_id, arguments, broker.is_some()).await?;
         let mut command = Command::new(executable);
         #[cfg(test)]
         if let Some(prefix) = self.invocation_prefix_overrides.get(adapter_id) {
@@ -227,6 +249,14 @@ impl AdapterRuntime {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        if let Some(broker) = &broker {
+            command
+                .env("SSH_ASKPASS", askpass_executable())
+                .env("SSH_ASKPASS_REQUIRE", "force")
+                .env("DISPLAY", "aegiz:0")
+                .env("AEGIZ_ASKPASS_SOCKET", &broker.socket_path)
+                .env("AEGIZ_ASKPASS_TOKEN", &broker.token);
+        }
         if let Some(directory) = working_directory {
             command.current_dir(directory);
         }
@@ -509,7 +539,7 @@ fn validate_sftp_arguments(arguments: &[String]) -> Result<()> {
     let operation = arguments.get(1).map(String::as_str).unwrap_or_default();
     let expected = match operation {
         "list" | "mkdir" | "delete" | "rmdir" => 3,
-        "upload" | "download" | "rename" | "chmod" => 4,
+        "upload" | "download" | "rename" | "copy" | "chmod" => 4,
         _ => bail!("unsupported SFTP operation"),
     };
     if arguments.len() != expected {
@@ -532,6 +562,7 @@ fn validate_sftp_arguments(arguments: &[String]) -> Result<()> {
 async fn prepare_adapter_invocation(
     adapter_id: &str,
     arguments: &[String],
+    password_authentication: bool,
 ) -> Result<(Vec<String>, Option<String>)> {
     if adapter_id != "sftp" {
         return Ok((arguments.to_vec(), None));
@@ -545,6 +576,11 @@ async fn prepare_adapter_invocation(
         "rmdir" => format!("rmdir {}", sftp_quote(&arguments[2])),
         "rename" => format!(
             "rename {} {}",
+            sftp_quote(&arguments[2]),
+            sftp_quote(&arguments[3])
+        ),
+        "copy" => format!(
+            "copy {} {}",
             sftp_quote(&arguments[2]),
             sftp_quote(&arguments[3])
         ),
@@ -581,15 +617,23 @@ async fn prepare_adapter_invocation(
         }
         _ => bail!("unsupported SFTP operation"),
     };
-    let process_arguments = vec![
+    let mut process_arguments = vec![
         "-N".into(),
-        "-oBatchMode=yes".into(),
+        format!(
+            "-oBatchMode={}",
+            if password_authentication { "no" } else { "yes" }
+        ),
         "-oConnectTimeout=10".into(),
         "-oConnectionAttempts=1".into(),
-        "-b".into(),
-        "-".into(),
-        alias.clone(),
     ];
+    if password_authentication {
+        process_arguments.extend([
+            "-oNumberOfPasswordPrompts=1".into(),
+            "-oPreferredAuthentications=keyboard-interactive,password".into(),
+            "-oPubkeyAuthentication=no".into(),
+        ]);
+    }
+    process_arguments.extend(["-b".into(), "-".into(), alias.clone()]);
     Ok((process_arguments, Some(format!("@{command}\n@quit\n"))))
 }
 
@@ -618,6 +662,7 @@ async fn validate_working_directory(value: &str) -> Result<Option<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     async fn run_fixture(
         runtime: &AdapterRuntime,
@@ -634,6 +679,7 @@ mod tests {
                 arguments,
                 String::new(),
                 confirmed_mutation,
+                Vec::new(),
                 sender,
             )
             .await;
@@ -645,7 +691,7 @@ mod tests {
     }
 
     fn fixture_runtime(store: Store) -> AdapterRuntime {
-        let mut runtime = AdapterRuntime::new(store);
+        let mut runtime = AdapterRuntime::new(store, std::env::temp_dir());
         for adapter in [
             "ssh-host",
             "docker",
@@ -786,7 +832,7 @@ mod tests {
                 .contains("output line omitted: exceeded 16 KiB")
         }));
 
-        let failed_runtime = AdapterRuntime::new(store)
+        let failed_runtime = AdapterRuntime::new(store, std::env::temp_dir())
             .with_executable_override("docker", PathBuf::from("/usr/bin/false"));
         let failed = run_fixture(&failed_runtime, "docker", vec!["ps".into()], false).await;
         let terminal = failed.last().unwrap();
@@ -829,7 +875,7 @@ mod tests {
         sftp_prefix.extend(["-P".into(), port.to_string()]);
 
         let store = Store::in_memory().await.unwrap();
-        let runtime = AdapterRuntime::new(store.clone())
+        let runtime = AdapterRuntime::new(store.clone(), std::env::temp_dir())
             .with_executable_override("ssh-host", PathBuf::from("/usr/bin/ssh"))
             .with_executable_override("sftp", PathBuf::from("/usr/bin/sftp"))
             .with_invocation_prefix("ssh-host", ssh_prefix)
@@ -971,6 +1017,7 @@ mod tests {
                         host_arguments("sleep 30"),
                         String::new(),
                         true,
+                        Vec::new(),
                         sender,
                     )
                     .await;
@@ -1015,7 +1062,7 @@ mod tests {
 
     #[tokio::test]
     async fn immediate_adapter_cancellation_cannot_lose_the_registration_race() {
-        let runtime = AdapterRuntime::new(Store::in_memory().await.unwrap())
+        let runtime = AdapterRuntime::new(Store::in_memory().await.unwrap(), std::env::temp_dir())
             .with_executable_override("docker", PathBuf::from("/bin/sleep"));
         let operation_id = Uuid::new_v4();
         let (sender, mut receiver) = mpsc::channel(16);
@@ -1029,6 +1076,7 @@ mod tests {
                         vec!["30".into()],
                         String::new(),
                         true,
+                        Vec::new(),
                         sender,
                     )
                     .await;
@@ -1059,7 +1107,7 @@ mod tests {
 
     #[tokio::test]
     async fn capability_detection_honors_a_trusted_executable_fixture_override() {
-        let runtime = AdapterRuntime::new(Store::in_memory().await.unwrap())
+        let runtime = AdapterRuntime::new(Store::in_memory().await.unwrap(), std::env::temp_dir())
             .with_executable_override("docker", PathBuf::from("/bin/echo"));
         let capabilities = runtime.capabilities().await;
         let docker = capabilities
@@ -1192,7 +1240,7 @@ mod tests {
             "-o".into(),
             "ConnectionAttempts=1".into(),
             "prod-api".into(),
-            SSH_PROCESS_LIST_COMMAND.into(),
+            "ps -axo pid=,ppid=,user=,%cpu=,%mem=,etime=,comm=,args=".into(),
         ];
         assert!(!requires_confirmation("ssh-host", &read));
         let mut mutation = read;
@@ -1225,6 +1273,15 @@ mod tests {
     fn sftp_adapter_is_structured_and_never_accepts_local_shell_commands() {
         assert!(
             validate_sftp_arguments(&["prod-api".into(), "list".into(), "/var/log".into()]).is_ok()
+        );
+        assert!(
+            validate_sftp_arguments(&[
+                "prod-api".into(),
+                "copy".into(),
+                "/srv/a".into(),
+                "/srv/b".into(),
+            ])
+            .is_ok()
         );
         assert!(
             validate_sftp_arguments(&["prod-api".into(), "!touch".into(), "/tmp/bad".into()])

@@ -51,7 +51,7 @@ impl AegizCore for CoreService {
     ) -> Result<Response<HandshakeResponse>, Status> {
         Ok(Response::new(HandshakeResponse {
             core_version: env!("CARGO_PKG_VERSION").into(),
-            protocol_version: 6,
+            protocol_version: 7,
         }))
     }
 
@@ -245,6 +245,7 @@ impl AegizCore for CoreService {
                     input.arguments,
                     input.working_directory,
                     input.confirmed_mutation,
+                    input.ssh_auth_secret,
                     sender,
                 )
                 .await;

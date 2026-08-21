@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
         );
     }
     let manager = TunnelManager::new(store.clone(), runtime_directory.to_path_buf());
-    let adapters = AdapterRuntime::new(store.clone());
+    let adapters = AdapterRuntime::new(store.clone(), runtime_directory.to_path_buf());
     let databases = DatabaseRuntime::new(store.clone(), manager.clone());
     let core_service =
         proto::aegiz_core_server::AegizCoreServer::new(interfaces::rpc::CoreService::new(

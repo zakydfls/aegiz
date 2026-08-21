@@ -15,6 +15,11 @@ private struct SFTPTransferSpec: Sendable {
     let remote: String
 }
 
+private struct SFTPBatchOperation: Sendable {
+    let operation: String
+    let fields: [String]
+}
+
 private struct FileTransferRecord: Identifiable, Sendable {
     let id = UUID()
     let title: String
@@ -31,6 +36,7 @@ private struct FileTransferRecord: Identifiable, Sendable {
 private enum PendingSFTPMutation {
     case uploads([SFTPTransferSpec])
     case delete(remote: String, directory: Bool)
+    case batch(title: String, operations: [SFTPBatchOperation])
     case rename(from: String, to: String)
     case mkdir(remote: String)
     case chmod(mode: String, remote: String)
@@ -66,6 +72,8 @@ struct FilesView: View {
     @State private var remotePath = "."
     @State private var entries: [SFTPEntryModel] = []
     @State private var selectedEntryID: String?
+    @State private var selectedEntryIDs = Set<String>()
+    @State private var selectionAnchorID: String?
     @State private var newFolderName = ""
     @State private var renameValue = ""
     @State private var chmodValue = "644"
@@ -84,10 +92,22 @@ struct FilesView: View {
     @State private var isListing = false
     @State private var hasLoadedListing = false
     @State private var listingRequestID: UUID?
+    @State private var remoteClipboard: [SFTPEntryModel] = []
+    @State private var clipboardIsCut = false
+    @State private var showingConnectionSettings = false
+    @State private var showingNewFolder = false
+    @State private var showingMove = false
+    @State private var moveDestination = ""
 
     private var host: HostModel? { model.selectedHost }
     private var selectedEntry: SFTPEntryModel? {
         entries.first { $0.id == selectedEntryID }
+    }
+    private var selectedEntries: [SFTPEntryModel] {
+        entries.filter { selectedEntryIDs.contains($0.id) }
+    }
+    private var selectedFileEntries: [SFTPEntryModel] {
+        selectedEntries.filter { !$0.isDirectory }
     }
     private var capability: ToolCapabilityModel? { model.capability("sftp") }
     private var operation: ToolOperationModel? {
@@ -155,6 +175,37 @@ struct FilesView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingConnectionSettings) {
+            SFTPConnectionSheet(
+                host: host,
+                secrets: model.secrets,
+                selectedSecretID: Binding(
+                    get: { host.map { model.sftpSecretReference(for: $0.id) } ?? "" },
+                    set: { value in
+                        if let host { model.setSFTPSecretReference(value, for: host.id) }
+                    }
+                ),
+                createSecret: {
+                    model.beginCreatingSecret(kind: .sshPassword)
+                    showingConnectionSettings = false
+                }
+            )
+        }
+        .sheet(isPresented: $showingNewFolder) {
+            SFTPNewFolderSheet(name: $newFolderName) {
+                guard Self.isSafeLeafName(newFolderName) else {
+                    model.notice = "Enter a safe directory name without path separators."
+                    return
+                }
+                showingNewFolder = false
+                confirm(.mkdir(remote: SFTPListingParser.remotePath(remotePath, appending: newFolderName)))
+            }
+        }
+        .sheet(isPresented: $showingMove) {
+            SFTPMoveSheet(destination: $moveDestination, itemCount: selectedEntries.count) {
+                moveSelected()
+            }
+        }
         .onChange(of: selectedEntryID) { _, _ in
             renameValue = selectedEntry?.name ?? ""
             if let permissions = selectedEntry?.permissions,
@@ -181,6 +232,8 @@ struct FilesView: View {
                         model.selectedHostID = $0
                         entries = []
                         selectedEntryID = nil
+                        selectedEntryIDs = []
+                        selectionAnchorID = nil
                         remotePath = "."
                         newFolderName = ""
                         hasLoadedListing = false
@@ -223,6 +276,15 @@ struct FilesView: View {
             }
             .buttonStyle(.borderedProminent)
             .help("Refresh this remote directory")
+            Button {
+                showingConnectionSettings = true
+            } label: {
+                Label(
+                    model.sftpSecretReference(for: host?.id ?? "").isEmpty ? "Authentication" : "Password saved",
+                    systemImage: "key.fill"
+                )
+            }
+            .help("Choose a Keychain SSH password or use your OpenSSH config and agent")
             if operation?.isRunning == true {
                 Button("Cancel", role: .destructive) {
                     Task { await model.cancelToolOperation() }
@@ -329,7 +391,7 @@ struct FilesView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .aegizInteractiveRow(isSelected: selectedEntryID == entry.id)
+                        .aegizInteractiveRow(isSelected: selectedEntryIDs.contains(entry.id))
                         .simultaneousGesture(TapGesture(count: 2).onEnded {
                             open(entry)
                         })
@@ -361,6 +423,12 @@ struct FilesView: View {
     private var browserToolbar: some View {
         HStack(spacing: 8) {
             Button {
+                newFolderName = ""
+                showingNewFolder = true
+            } label: {
+                Label("New Folder", systemImage: "folder.badge.plus")
+            }
+            Button {
                 chooseUpload()
             } label: {
                 Label("Upload", systemImage: "arrow.up.doc")
@@ -370,14 +438,32 @@ struct FilesView: View {
             } label: {
                 Label("Download", systemImage: "arrow.down.doc")
             }
-            .disabled(selectedEntry == nil || selectedEntry?.isDirectory == true)
+            .disabled(selectedFileEntries.isEmpty)
+            Button {
+                copySelected(cut: false)
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            .disabled(selectedFileEntries.isEmpty)
+            Button {
+                copySelected(cut: true)
+            } label: {
+                Label("Cut", systemImage: "scissors")
+            }
+            .disabled(selectedEntries.isEmpty)
+            Button {
+                pasteClipboard()
+            } label: {
+                Label("Paste", systemImage: "clipboard")
+            }
+            .disabled(remoteClipboard.isEmpty)
             Button {
                 if let entry = selectedEntry { preview(entry) }
             } label: {
                 Label("Preview", systemImage: "eye")
             }
             .disabled(
-                selectedEntry == nil
+                selectedEntries.count != 1
                     || selectedEntry?.isDirectory == true
                     || previewTask != nil
             )
@@ -388,10 +474,20 @@ struct FilesView: View {
                     Label("Quick Look", systemImage: "eye.circle")
                 }
                 .disabled(
-                    selectedEntry == nil
+                    selectedEntries.count != 1
                         || selectedEntry?.isDirectory == true
                         || transferWorker != nil
                 )
+                Divider()
+                Button("Move Selected…") {
+                    moveDestination = remotePath
+                    showingMove = true
+                }
+                .disabled(selectedEntries.isEmpty)
+                Button("Delete Selected", role: .destructive) {
+                    deleteSelected()
+                }
+                .disabled(selectedEntries.isEmpty)
                 Divider()
                 Picker("Upload conflicts", selection: $conflictPolicy) {
                     ForEach(SFTPConflictPolicy.allCases) { policy in
@@ -403,7 +499,7 @@ struct FilesView: View {
             }
             .help("Quick Look and upload conflict settings")
             Spacer()
-            Text("\(entries.count) items")
+            Text(selectedEntries.isEmpty ? "\(entries.count) items" : "\(selectedEntries.count) selected")
                 .font(.system(size: 10).monospacedDigit())
                 .foregroundStyle(.secondary)
         }
@@ -415,7 +511,7 @@ struct FilesView: View {
     private var inspector: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let entry = selectedEntry {
+                if selectedEntries.count == 1, let entry = selectedEntry {
                     AegizInspectorSection("Selected item") {
                         Label(entry.name, systemImage: entry.isDirectory ? "folder.fill" : "doc.fill")
                             .font(.system(size: 14, weight: .semibold))
@@ -465,6 +561,20 @@ struct FilesView: View {
                             confirm(.delete(remote: entry.path, directory: entry.isDirectory))
                         }
                     }
+                } else if !selectedEntries.isEmpty {
+                    VStack(spacing: 7) {
+                        Image(systemName: "checklist")
+                            .font(.system(size: 24, weight: .light))
+                            .foregroundStyle(AegizTheme.accent)
+                        Text("\(selectedEntries.count) items selected")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Use Copy, Cut, Paste, Move, Download, or Delete Selected from the toolbar.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
                 } else {
                     VStack(spacing: 7) {
                         Image(systemName: "cursorarrow.click")
@@ -622,6 +732,7 @@ struct FilesView: View {
         case .uploads(let items):
             items.count == 1 ? "Upload this local file?" : "Upload \(items.count) local files?"
         case .delete: "Delete this remote item?"
+        case .batch(let title, _): title
         case .rename: "Rename this remote item?"
         case .mkdir: "Create this remote directory?"
         case .chmod: "Change remote permissions?"
@@ -687,11 +798,32 @@ struct FilesView: View {
         }
         entries = SFTPListingParser.parse(result?.output ?? "", directory: path)
         selectedEntryID = nil
+        selectedEntryIDs = []
+        selectionAnchorID = nil
         hasLoadedListing = true
     }
 
     private func select(_ entry: SFTPEntryModel) {
-        selectedEntryID = entry.id
+        let modifiers = NSEvent.modifierFlags
+        if modifiers.contains(.shift),
+           let anchor = selectionAnchorID,
+           let start = entries.firstIndex(where: { $0.id == anchor }),
+           let end = entries.firstIndex(where: { $0.id == entry.id }) {
+            selectedEntryIDs = Set(entries[min(start, end)...max(start, end)].map(\.id))
+        } else if modifiers.contains(.command) {
+            if selectedEntryIDs.contains(entry.id) {
+                selectedEntryIDs.remove(entry.id)
+            } else {
+                selectedEntryIDs.insert(entry.id)
+            }
+            selectionAnchorID = entry.id
+        } else {
+            selectedEntryIDs = [entry.id]
+            selectionAnchorID = entry.id
+        }
+        selectedEntryID = selectedEntryIDs.contains(entry.id)
+            ? entry.id
+            : selectedEntryIDs.first
         renameValue = entry.name
         if let mode = Self.octalMode(from: entry.permissions) {
             chmodValue = mode
@@ -771,16 +903,88 @@ struct FilesView: View {
     }
 
     private func downloadSelected() {
-        guard let host, let entry = selectedEntry, !entry.isDirectory else { return }
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = entry.name
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        startTransfer(
-            title: "Download \(entry.name)",
-            route: "\(host.alias):\(entry.path) → \(url.path)",
-            operation: "download",
-            fields: [entry.path, url.path]
-        )
+        guard let host, !selectedFileEntries.isEmpty else { return }
+        if selectedFileEntries.count == 1, let entry = selectedFileEntries.first {
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = entry.name
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            startTransfer(
+                title: "Download \(entry.name)",
+                route: "\(host.alias):\(entry.path) → \(url.path)",
+                operation: "download",
+                fields: [entry.path, url.path]
+            )
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.prompt = "Download Here"
+        guard panel.runModal() == .OK, let directory = panel.url else { return }
+        for entry in selectedFileEntries {
+            let destination = directory.appending(path: entry.name)
+            startTransfer(
+                title: "Download \(entry.name)",
+                route: "\(host.alias):\(entry.path) → \(destination.path)",
+                operation: "download",
+                fields: [entry.path, destination.path]
+            )
+        }
+    }
+
+    private func copySelected(cut: Bool) {
+        let files = selectedFileEntries
+        guard !files.isEmpty else {
+            model.notice = "Copy and cut currently support files. Open a folder, then paste into it."
+            return
+        }
+        remoteClipboard = files
+        clipboardIsCut = cut
+        model.notice = "\(files.count) file(s) \(cut ? "ready to move" : "copied") from \(remotePath)."
+    }
+
+    private func pasteClipboard() {
+        guard !remoteClipboard.isEmpty else { return }
+        let operations = remoteClipboard.compactMap { entry -> SFTPBatchOperation? in
+            let destination = SFTPListingParser.remotePath(remotePath, appending: entry.name)
+            guard destination != entry.path else { return nil }
+            return SFTPBatchOperation(
+                operation: clipboardIsCut ? "rename" : "copy",
+                fields: [entry.path, destination]
+            )
+        }
+        guard !operations.isEmpty else {
+            model.notice = "Choose another remote folder before pasting these files."
+            return
+        }
+        confirm(.batch(title: clipboardIsCut ? "Move selected files?" : "Copy selected files?", operations: operations))
+    }
+
+    private func moveSelected() {
+        let destinationDirectory = moveDestination.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destinationDirectory.isEmpty, !destinationDirectory.contains("\n"), !destinationDirectory.contains("\r") else {
+            model.notice = "Enter one remote destination directory."
+            return
+        }
+        let operations = selectedEntries.compactMap { entry -> SFTPBatchOperation? in
+            let destination = SFTPListingParser.remotePath(destinationDirectory, appending: entry.name)
+            guard destination != entry.path else { return nil }
+            return SFTPBatchOperation(operation: "rename", fields: [entry.path, destination])
+        }
+        guard !operations.isEmpty else {
+            model.notice = "Choose a different destination directory."
+            return
+        }
+        showingMove = false
+        confirm(.batch(title: "Move selected items?", operations: operations))
+    }
+
+    private func deleteSelected() {
+        let operations = selectedEntries.map {
+            SFTPBatchOperation(operation: $0.isDirectory ? "rmdir" : "delete", fields: [$0.path])
+        }
+        guard !operations.isEmpty else { return }
+        confirm(.batch(title: "Delete \(operations.count) selected item(s)?", operations: operations))
     }
 
     private func preview(_ entry: SFTPEntryModel) {
@@ -973,6 +1177,8 @@ struct FilesView: View {
             }
         case .delete(let remote, let directory):
             runMutation(operation: directory ? "rmdir" : "delete", fields: [remote])
+        case .batch(_, let operations):
+            runBatchMutation(operations)
         case .rename(let source, let destination):
             runMutation(operation: "rename", fields: [source, destination])
         case .mkdir(let remote):
@@ -994,6 +1200,30 @@ struct FilesView: View {
             if result?.success == true {
                 refreshListing()
             }
+        }
+    }
+
+    private func runBatchMutation(_ operations: [SFTPBatchOperation]) {
+        guard let host else { return }
+        Task {
+            var failures = 0
+            for item in operations {
+                let result = await model.runSFTPOperation(
+                    host: host,
+                    operation: item.operation,
+                    fields: item.fields,
+                    confirmedMutation: true
+                )
+                if result?.success != true { failures += 1 }
+            }
+            if clipboardIsCut, failures == 0 {
+                remoteClipboard = []
+                clipboardIsCut = false
+            }
+            if failures > 0 {
+                model.notice = "\(failures) file operation(s) failed. Review Operations, then refresh the directory."
+            }
+            refreshListing()
         }
     }
 
@@ -1279,6 +1509,111 @@ private struct FilePreviewTextView: NSViewRepresentable {
         }
         textView.string = text
         textView.scrollToBeginningOfDocument(nil)
+    }
+}
+
+private struct SFTPConnectionSheet: View {
+    let host: HostModel?
+    let secrets: [SecretMetadataModel]
+    @Binding var selectedSecretID: String
+    let createSecret: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var passwordSecrets: [SecretMetadataModel] {
+        secrets.filter { $0.kind == .sshPassword || $0.kind == .password }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Label("SFTP authentication", systemImage: "key.fill")
+                    .font(.headline)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            Text("\(host?.alias ?? "This host") uses your normal OpenSSH config, keys, and agent unless a Keychain password is selected below.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Form {
+                Picker("Keychain SSH password", selection: $selectedSecretID) {
+                    Text("Use OpenSSH config / agent").tag("")
+                    ForEach(passwordSecrets) { secret in
+                        Text(secret.name).tag(secret.id)
+                    }
+                }
+                Text("Aegiz only stores the Keychain item reference. The password is supplied to OpenSSH only while this SFTP operation runs.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("Create Keychain Password…") { createSecret() }
+                Spacer()
+                if !selectedSecretID.isEmpty {
+                    Label("Password ready", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
+            }
+        }
+        .padding(24)
+        .frame(width: 500)
+    }
+}
+
+private struct SFTPNewFolderSheet: View {
+    @Binding var name: String
+    let create: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("New remote folder")
+                .font(.headline)
+            TextField("Folder name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { create() }
+            HStack {
+                Button("Cancel") { dismiss() }
+                Spacer()
+                Button("Create", action: create)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 360)
+    }
+}
+
+private struct SFTPMoveSheet: View {
+    @Binding var destination: String
+    let itemCount: Int
+    let move: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Move \(itemCount) remote item\(itemCount == 1 ? "" : "s")")
+                .font(.headline)
+            Text("Destination directory")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            TextField("/srv/app/releases", text: $destination)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+                .onSubmit { move() }
+            HStack {
+                Button("Cancel") { dismiss() }
+                Spacer()
+                Button("Move", action: move)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(destination.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 440)
     }
 }
 

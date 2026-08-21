@@ -38,6 +38,7 @@ final class AppModel {
     var terminalSettingsByHost: [String: TerminalHostSettings] = [:]
     var hostOrganizationByID: [String: HostOrganizationMetadata] = [:]
     var tunnelSecretReferenceByID: [String: String] = [:]
+    var sftpSecretReferenceByHostID: [String: String] = [:]
     var selectedTunnelID: String?
     var tunnelOperationID: String?
     var hostInventoryFilter = HostInventoryFilter()
@@ -59,6 +60,7 @@ final class AppModel {
         restoreTerminalSessions()
         restoreHostOrganization()
         restoreTunnelSecretReferences()
+        restoreSFTPSecretReferences()
     }
 
     var selectedHost: HostModel? {
@@ -169,6 +171,19 @@ final class AppModel {
         notice = reference.isEmpty
             ? "Tunnel will use your OpenSSH config, keys, and agent."
             : "SSH password reference saved locally; its value remains in macOS Keychain."
+    }
+
+    func sftpSecretReference(for hostID: String) -> String {
+        sftpSecretReferenceByHostID[hostID] ?? ""
+    }
+
+    func setSFTPSecretReference(_ reference: String, for hostID: String) {
+        if reference.isEmpty {
+            sftpSecretReferenceByHostID[hostID] = nil
+        } else {
+            sftpSecretReferenceByHostID[hostID] = reference
+        }
+        persistSFTPSecretReferences()
     }
 
     func openSession(_ host: HostModel) {
@@ -412,6 +427,7 @@ final class AppModel {
         arguments: [String],
         workingDirectory: String,
         confirmedMutation: Bool,
+        authenticationSecret: Data = Data(),
         onEvent: (@MainActor @Sendable (OperationEventModel) -> Void)? = nil
     ) async -> ToolOperationModel? {
         guard !arguments.isEmpty else {
@@ -427,7 +443,8 @@ final class AppModel {
                 adapterID: adapterID,
                 arguments: arguments,
                 workingDirectory: workingDirectory,
-                confirmedMutation: confirmedMutation
+                confirmedMutation: confirmedMutation,
+                authenticationSecret: authenticationSecret
             ) { [weak self] event in
                 await MainActor.run {
                     guard let self,
@@ -495,11 +512,38 @@ final class AppModel {
         confirmedMutation: Bool,
         onEvent: (@MainActor @Sendable (OperationEventModel) -> Void)? = nil
     ) async -> ToolOperationModel? {
+        var authenticationSecret = Data()
+        defer {
+            authenticationSecret.resetBytes(in: 0..<authenticationSecret.count)
+            authenticationSecret.removeAll(keepingCapacity: false)
+        }
+        do {
+            if let reference = sftpSecretReferenceByHostID[host.id], !reference.isEmpty {
+                guard secrets.contains(where: { $0.id == reference }) else {
+                    notice = "The SSH password for \(host.alias) no longer exists in Keychain. Choose another secret in Files."
+                    return nil
+                }
+                let unlockedNow = vaultIsLocked
+                guard await unlockVaultIfNeeded(reason: "Use the SSH password for \(host.alias)") else {
+                    return nil
+                }
+                authenticationSecret = try await vault.revealSecret(
+                    id: reference,
+                    reason: "Connect SFTP to \(host.alias)",
+                    authenticationAlreadySatisfied: unlockedNow
+                )
+                registerVaultActivity()
+            }
+        } catch {
+            notice = error.localizedDescription
+            return nil
+        }
         return await runTool(
             adapterID: "sftp",
             arguments: [host.alias, operation] + fields,
             workingDirectory: "",
             confirmedMutation: confirmedMutation,
+            authenticationSecret: authenticationSecret,
             onEvent: onEvent
         )
     }
@@ -824,7 +868,11 @@ final class AppModel {
             tunnelSecretReferenceByID = tunnelSecretReferenceByID.filter {
                 $0.value != secret.id
             }
+            sftpSecretReferenceByHostID = sftpSecretReferenceByHostID.filter {
+                $0.value != secret.id
+            }
             persistTunnelSecretReferences()
+            persistSFTPSecretReferences()
             secrets = try await vault.listSecrets()
             notice = "Secret deleted from the local Keychain."
             registerVaultActivity()
@@ -925,6 +973,15 @@ final class AppModel {
         tunnelSecretReferenceByID = restored
     }
 
+    private func restoreSFTPSecretReferences() {
+        guard let data = UserDefaults.standard.data(forKey: "sftpSecretReferences"),
+              let restored = try? JSONDecoder().decode([String: String].self, from: data)
+        else {
+            return
+        }
+        sftpSecretReferenceByHostID = restored
+    }
+
     private func persistTerminalSettings() {
         guard let data = try? JSONEncoder().encode(terminalSettingsByHost) else {
             return
@@ -944,6 +1001,13 @@ final class AppModel {
             return
         }
         UserDefaults.standard.set(data, forKey: "tunnelSecretReferences")
+    }
+
+    private func persistSFTPSecretReferences() {
+        guard let data = try? JSONEncoder().encode(sftpSecretReferenceByHostID) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: "sftpSecretReferences")
     }
 
     private func organizedValues(

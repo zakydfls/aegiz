@@ -249,6 +249,7 @@ actor CoreClient {
         arguments: [String],
         workingDirectory: String,
         confirmedMutation: Bool,
+        authenticationSecret: Data = Data(),
         onEvent: @escaping @Sendable (OperationEventModel) async -> Void
     ) async throws {
         guard let service else { throw CoreClientError.socketUnavailable }
@@ -257,6 +258,11 @@ actor CoreClient {
         request.arguments = arguments
         request.workingDirectory = workingDirectory
         request.confirmedMutation = confirmedMutation
+        request.sshAuthSecret = authenticationSecret
+        defer {
+            request.sshAuthSecret.resetBytes(in: 0..<request.sshAuthSecret.count)
+            request.sshAuthSecret.removeAll(keepingCapacity: false)
+        }
         try await service.runTool(request, metadata: metadata()) { response in
             for try await event in response.messages {
                 await onEvent(Self.mapOperationEvent(event))
