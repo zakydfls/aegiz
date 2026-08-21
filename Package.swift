@@ -35,7 +35,7 @@ let package = Package(
                 "AegizRPC",
                 "GhosttyKit",
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
-                .product(name: "GRPCNIOTransportHTTP2", package: "grpc-swift-nio-transport"),
+                .product(name: "GRPCNIOTransportHTTP2Posix", package: "grpc-swift-nio-transport"),
             ],
             path: "apps/macos/Sources/Aegiz",
             linkerSettings: [

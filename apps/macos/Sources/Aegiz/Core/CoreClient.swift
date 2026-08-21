@@ -1,7 +1,7 @@
 import AegizRPC
 import Foundation
 import GRPCCore
-import GRPCNIOTransportHTTP2
+import GRPCNIOTransportHTTP2Posix
 import Security
 
 enum CoreClientError: LocalizedError {
