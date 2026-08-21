@@ -819,13 +819,19 @@ mod tests {
         assert!(!output.contains("fixture-secret"));
         assert!(output.contains("token=[REDACTED]"));
 
-        let long_line = run_fixture(
-            &runtime,
-            "docker",
-            vec!["fixture".into(), "x".repeat(MAX_STREAM_LINE_BYTES + 100)],
-            true,
-        )
-        .await;
+        let long_line_runtime = AdapterRuntime::new(store.clone(), std::env::temp_dir())
+            .with_executable_override("docker", PathBuf::from("/bin/sh"))
+            .with_invocation_prefix(
+                "docker",
+                vec![
+                    "-c".into(),
+                    format!(
+                        "head -c {} /dev/zero | tr '\\000' x",
+                        MAX_STREAM_LINE_BYTES + 100
+                    ),
+                ],
+            );
+        let long_line = run_fixture(&long_line_runtime, "docker", vec!["ps".into()], false).await;
         assert!(long_line.iter().any(|event| {
             event
                 .message
