@@ -135,8 +135,23 @@ Create the drag-to-Applications image:
 open dist/Aegiz-0.2.0-arm64.dmg
 ```
 
-Public distribution still needs Developer ID signing and notarization. The
-current development signature is intended for the maintainer’s Mac.
+## Install from GitHub Releases
+
+Until Aegiz has a paid Apple Developer membership, releases are ad-hoc signed
+preview builds. Download the `.dmg` from the matching GitHub Release, drag
+**Aegiz** to **Applications**, then on its first launch use one of these macOS
+paths if Gatekeeper intervenes:
+
+- Control-click **Aegiz** → **Open** → **Open**; or
+- System Settings → Privacy & Security → **Open Anyway**.
+
+The release workflow runs on tags beginning with `v` and publishes the DMG,
+SHA-256 manifest, and SBOM. Later, a Developer ID certificate and notarization
+can replace the ad-hoc step without changing the user-facing download flow.
+
+To publish, set `CFBundleShortVersionString` to the intended version, then push
+the matching tag (for example `v0.2.0`). The workflow refuses a mismatched tag
+so the DMG and its release page never disagree about the version.
 
 ## Status
 

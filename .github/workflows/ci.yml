@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Zig
+        run: brew install zig
+      - name: Build embedded terminal framework
+        run: ./scripts/build-ghostty-framework.sh
+      - name: Check architecture and Rust formatting
+        run: |
+          ./scripts/check-architecture.sh
+          cargo fmt --check
+      - name: Test Rust core
+        run: cargo test -p aegiz-core
+      - name: Build macOS app
+        run: swift build -c debug --product Aegiz

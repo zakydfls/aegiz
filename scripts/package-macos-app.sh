@@ -8,6 +8,7 @@ contents_dir="$app_dir/Contents"
 team_id=${AEGIZ_TEAM_ID:-3S37YU6S3X}
 signing_account=${AEGIZ_SIGNING_ACCOUNT:-M9R3HPSDS2}
 codesign_identity=${AEGIZ_CODESIGN_IDENTITY:-}
+allow_unsigned=${AEGIZ_ALLOW_UNSIGNED:-0}
 
 cd "$repository_dir"
 case "$configuration" in
@@ -77,9 +78,16 @@ if [ -z "$codesign_identity" ]; then
     )
 fi
 if [ -z "$codesign_identity" ]; then
-    echo "No Apple Development signing identity for account $signing_account." >&2
-    echo "Set AEGIZ_TEAM_ID, AEGIZ_SIGNING_ACCOUNT, and AEGIZ_CODESIGN_IDENTITY for your developer account." >&2
-    exit 1
+    if [ "$allow_unsigned" = "1" ]; then
+        codesign_identity=-
+        team_id=
+        echo "Packaging an ad-hoc signed build; Gatekeeper will require manual approval." >&2
+    else
+        echo "No Apple Development signing identity for account $signing_account." >&2
+        echo "Set AEGIZ_TEAM_ID, AEGIZ_SIGNING_ACCOUNT, and AEGIZ_CODESIGN_IDENTITY for your developer account." >&2
+        echo "For an unsigned GitHub Release build, set AEGIZ_ALLOW_UNSIGNED=1 explicitly." >&2
+        exit 1
+    fi
 fi
 identity_record=$(
     security find-identity -v -p codesigning 2>/dev/null |
@@ -116,7 +124,7 @@ codesign \
     "$app_dir"
 codesign --verify --deep --strict "$app_dir"
 actual_team_id=$(codesign -dvv "$app_dir" 2>&1 | awk -F= '/^TeamIdentifier=/{print $2; exit}')
-if [ -n "$team_id" ] && [ "$actual_team_id" != "$team_id" ]; then
+if [ "$codesign_identity" != "-" ] && [ -n "$team_id" ] && [ "$actual_team_id" != "$team_id" ]; then
     echo "Signed TeamIdentifier $actual_team_id does not match AEGIZ_TEAM_ID $team_id." >&2
     exit 1
 fi

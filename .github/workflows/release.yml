@@ -1,0 +1,49 @@
+name: Release macOS DMG
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, for example v0.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  unsigned-dmg:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Zig
+        run: brew install zig
+      - name: Build embedded terminal framework
+        run: ./scripts/build-ghostty-framework.sh
+      - name: Test core
+        run: cargo test -p aegiz-core
+      - name: Verify release tag matches app version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          git rev-parse "$TAG^{commit}" >/dev/null
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' apps/macos/Resources/Info.plist)
+          test "$TAG" = "v$VERSION"
+      - name: Package unsigned DMG
+        env:
+          AEGIZ_ALLOW_UNSIGNED: "1"
+        run: ./scripts/create-macos-dmg.sh
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "Aegiz $TAG" --notes "Unsigned preview build. On first launch, macOS may require right-click → Open or System Settings → Privacy & Security → Open Anyway."
+          gh release upload "$TAG" dist/*.dmg dist/release-manifest.json dist/sbom.cdx.json --clobber
