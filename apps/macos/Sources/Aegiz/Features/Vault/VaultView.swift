@@ -141,7 +141,7 @@ struct VaultView: View {
                 ) {
                     NSWorkspace.shared.open(guide)
                 } else {
-                    model.notice = "Recovery guide: docs/RECOVERY.md"
+                    model.notice = "This preview build does not include the private recovery guide."
                 }
             } label: {
                 Image(systemName: "lifepreserver")

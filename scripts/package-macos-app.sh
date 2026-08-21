@@ -63,8 +63,12 @@ ditto "$core_binary" "$contents_dir/Resources/aegiz-core"
 ditto "$askpass_binary" "$contents_dir/Resources/aegiz-askpass"
 ditto "$watchdog_binary" "$contents_dir/Resources/aegiz-tunnel-watchdog"
 ditto "$repository_dir/apps/macos/Resources/AppIcon.icns" "$contents_dir/Resources/AppIcon.icns"
-ditto "$repository_dir/docs/RECOVERY.md" "$contents_dir/Resources/RECOVERY.md"
-ditto "$repository_dir/docs/SECURITY_MODEL.md" "$contents_dir/Resources/SECURITY_MODEL.md"
+for resource in RECOVERY SECURITY_MODEL; do
+    source_path="$repository_dir/docs/$resource.md"
+    if [ -f "$source_path" ]; then
+        ditto "$source_path" "$contents_dir/Resources/$resource.md"
+    fi
+done
 ditto "$repository_dir/apps/macos/Resources/Info.plist" "$contents_dir/Info.plist"
 chmod 0755 \
     "$contents_dir/MacOS/Aegiz" \
